@@ -29,7 +29,7 @@ Do not put the password in the YAML file or commit it to Git. There is no ngrok 
 
 This workflow uses Pinggy's free TCP tunnel. Pinggy documents free TCP tunnels without signup, but its free tunnels expire after about 60 minutes. The hostname and port are randomly allocated and change when the tunnel reconnects.
 
-The workflow is limited to 65 minutes. When the tunnel expires, the SSH step ends. Run the workflow again to get a new endpoint.
+The workflow timeout is 90 minutes to allow time for optional app installation plus the tunnel. The tunnel itself lasts about 60 minutes. When it expires, the SSH step ends. Run the workflow again to get a new endpoint.
 
 ### Run the workflow
 
@@ -61,7 +61,7 @@ Save the connection and launch it.
 
 ## Security and lifetime notes
 
-- The Windows runner is temporary. The workflow has a 65-minute timeout, matching the approximate 60-minute free tunnel lifetime.
+- The Windows runner is temporary. The workflow has a 90-minute job timeout, allowing for setup plus the approximately 60-minute free tunnel.
 - Only RDP port 3389 is forwarded. The Windows firewall's Remote Desktop rules are restricted to loopback addresses; the runner does not intentionally accept direct external RDP connections.
 - The Pinggy TCP endpoint is reachable by anyone who knows the temporary hostname and port. NLA and a strong password protect the Windows login, but the endpoint is not private network access.
 - The free hostname and port change each run. Update the Guacamole connection after starting a new workflow.
