@@ -14,30 +14,25 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
-    # GitHub-hosted jobs are limited to six hours. Stop a little before the hard limit.
-    timeout-minutes: 350
+    timeout-minutes: 65
 
     steps:
-      - name: Validate required Actions secrets
+      - name: Validate the Windows RDP password secret
         shell: pwsh
         env:
-          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
           WINDOWS_RDP_PASSWORD: ${{ secrets.WINDOWS_RDP_PASSWORD }}
         run: |
           $ErrorActionPreference = "Stop"
-          if ([string]::IsNullOrWhiteSpace($env:NGROK_AUTHTOKEN)) {
-            throw "Add NGROK_AUTHTOKEN under Settings > Secrets and variables > Actions."
-          }
           if ([string]::IsNullOrWhiteSpace($env:WINDOWS_RDP_PASSWORD)) {
             throw "Add WINDOWS_RDP_PASSWORD under Settings > Secrets and variables > Actions."
           }
-          if ($env:WINDOWS_RDP_PASSWORD.Length -lt 20) {
-            throw "WINDOWS_RDP_PASSWORD must be at least 20 characters."
+          if ($env:WINDOWS_RDP_PASSWORD.Length -lt 24) {
+            throw "WINDOWS_RDP_PASSWORD must be at least 24 characters."
           }
           if ($env:WINDOWS_RDP_PASSWORD.Contains([char]13) -or $env:WINDOWS_RDP_PASSWORD.Contains([char]10)) {
             throw "WINDOWS_RDP_PASSWORD cannot contain line breaks."
           }
-          Write-Host "Required secrets are present."
+          Write-Host "RDP password secret is present."
 
       - name: Enable Windows RDP with a dedicated non-admin account
         shell: pwsh
@@ -70,7 +65,9 @@ jobs:
           Set-Service -Name TermService -StartupType Automatic
           Start-Service -Name TermService
 
-          Get-NetFirewallRule -DisplayGroup "Remote Desktop" | Enable-NetFirewallRule
+          $rdpRules = Get-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction Stop
+          $rdpRules | Enable-NetFirewallRule
+          $rdpRules | Get-NetFirewallAddressFilter | Set-NetFirewallAddressFilter -RemoteAddress "127.0.0.1","::1"
 
           $rdpReady = $false
           for ($i = 1; $i -le 20; $i++) {
@@ -85,7 +82,7 @@ jobs:
             throw "Windows RDP did not start listening on TCP port 3389."
           }
 
-          Write-Host "RDP is listening. Dedicated account: $rdpUser. NLA is required."
+          Write-Host "RDP is listening on port 3389. Account: $rdpUser. NLA is required."
 
       - name: Install optional apps
         shell: pwsh
@@ -98,7 +95,7 @@ jobs:
             exit 0
           }
 
-          $packages = $env:APPS -split '[\s,]+' | Where-Object { $_ }
+          $packages = $env:APPS -split '[\\s,]+' | Where-Object { $_ }
           $failed = @()
 
           foreach ($package in $packages) {
@@ -113,90 +110,91 @@ jobs:
             Write-Warning "These optional packages failed: $($failed -join ', ')"
           }
 
-      - name: Start temporary ngrok TCP endpoint for RDP
+      - name: Verify Pinggy host key and open the free TCP tunnel
         shell: pwsh
-        env:
-          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
         run: |
           $ErrorActionPreference = "Stop"
 
-          $zipPath = Join-Path $env:RUNNER_TEMP "ngrok-windows-amd64.zip"
-          $ngrokDir = Join-Path $env:RUNNER_TEMP "ngrok"
-          $downloadUrl = "https://bin.ngrok.com/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip"
-
-          Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath
-          New-Item -ItemType Directory -Path $ngrokDir -Force | Out-Null
-          Expand-Archive -Path $zipPath -DestinationPath $ngrokDir -Force
-
-          $ngrokExe = Join-Path $ngrokDir "ngrok.exe"
-          if (-not (Test-Path $ngrokExe)) {
-            throw "ngrok.exe was not found after extraction."
+          $ssh = Get-Command ssh.exe -ErrorAction SilentlyContinue
+          $keyscan = Get-Command ssh-keyscan.exe -ErrorAction SilentlyContinue
+          $keygen = Get-Command ssh-keygen.exe -ErrorAction SilentlyContinue
+          if (-not $ssh -or -not $keyscan -or -not $keygen) {
+            throw "Windows OpenSSH Client (ssh.exe, ssh-keyscan.exe, ssh-keygen.exe) is required on the runner."
           }
 
-          & $ngrokExe config add-authtoken $env:NGROK_AUTHTOKEN
-          if ($LASTEXITCODE -ne 0) {
-            throw "ngrok rejected NGROK_AUTHTOKEN."
+          $knownHosts = Join-Path $env:RUNNER_TEMP "pinggy_known_hosts"
+          $scannedKeys = & $keyscan.Source -p 443 free.pinggy.io 2>$null
+          $rsaKeys = @($scannedKeys | Where-Object { $_ -match '\\s+ssh-rsa\\s+' })
+          if ($rsaKeys.Count -eq 0) {
+            throw "Could not retrieve Pinggy's RSA SSH host key."
           }
 
-          $stdoutPath = Join-Path $env:RUNNER_TEMP "ngrok.stdout.log"
-          $stderrPath = Join-Path $env:RUNNER_TEMP "ngrok.stderr.log"
+          [System.IO.File]::WriteAllLines($knownHosts, $rsaKeys, [System.Text.Encoding]::ASCII)
+          $fingerprints = & $keygen.Source -lf $knownHosts -E sha256 2>$null
+          $expectedFingerprint = "SHA256:nFd5rfJMGuZXvfeRzJ/BtT3TfksAxTWMajcrHRcI7AM"
+          if (-not (($fingerprints -join [Environment]::NewLine) -match [regex]::Escape($expectedFingerprint))) {
+            throw "Pinggy host key fingerprint did not match the published fingerprint. Refusing the connection."
+          }
+          Write-Host "Pinggy SSH host key verified."
 
-          Start-Process -FilePath $ngrokExe -ArgumentList "tcp 3389 --log=stdout --web-addr=127.0.0.1:4040" -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath | Out-Null
-
-          $endpointReady = $false
-          for ($attempt = 1; $attempt -le 40; $attempt++) {
-            try {
-              $agent = Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels" -TimeoutSec 3
-              $tcpTunnel = @($agent.tunnels) | Where-Object { $_.proto -eq "tcp" } | Select-Object -First 1
-              if ($tcpTunnel -and $tcpTunnel.public_url) {
-                $endpointReady = $true
-                break
+          $askPassSource = @'
+          using System;
+          public static class PinggyEmptyAskPass {
+              public static void Main(string[] args) {
+                  Console.WriteLine("");
               }
-            } catch {
-              # The local API may not be ready yet.
-            }
-            Start-Sleep -Seconds 3
           }
+          '@
+          $askPassExe = Join-Path $env:RUNNER_TEMP "pinggy-empty-askpass.exe"
+          Add-Type -TypeDefinition $askPassSource -Language CSharp -OutputAssembly $askPassExe -OutputType ConsoleApplication
 
-          if (-not $endpointReady) {
-            Write-Host "ngrok failed to create a TCP endpoint. Check the ngrok dashboard and account requirements."
-            throw "ngrok did not create a TCP endpoint for RDP."
-          }
+          $env:SSH_ASKPASS = $askPassExe
+          $env:SSH_ASKPASS_REQUIRE = "force"
+          $env:DISPLAY = "localhost:0"
 
           @"
-          ## Guacamole RDP endpoint is running
+          ## Windows Cloud PC — Guacamole connection
 
-          - Windows RDP: listening on TCP port 3389
-          - Windows username: guacuser
-          - Windows password: the repository Actions secret WINDOWS_RDP_PASSWORD
-          - Authentication: Network Level Authentication (NLA)
+          - Protocol: RDP
+          - Username: guacuser
+          - Password: GitHub Actions secret WINDOWS_RDP_PASSWORD
+          - Security: NLA
+          - RDP target on the runner: 127.0.0.1:3389
 
-          **Find the temporary TCP hostname and port:** open your ngrok dashboard at https://dashboard.ngrok.com/endpoints and copy the active TCP endpoint. The address is intentionally not printed in this public repository's workflow logs.
+          Copy the temporary tcp:// hostname and port from this step's SSH output. In Guacamole, use that hostname and port, username guacuser, your secret password, and security mode NLA.
 
-          In Guacamole, create an RDP connection using that hostname and port, username guacuser, your secret password, and security mode NLA. Leave the domain blank. Enable Ignore server certificate only if Guacamole reports that the Windows RDP certificate cannot be validated.
-
-          The endpoint exists only while this GitHub Actions job is running. It may change every time the workflow is started again.
+          The free tunnel expires after about 60 minutes. Run this workflow again for a new endpoint. The hostname and port will change.
           "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
-          Write-Host "ngrok TCP endpoint is active. Its public address is available in the ngrok dashboard, not in these public logs."
+          Write-Host "Starting Pinggy TCP tunnel to local RDP port 3389."
+          Write-Host "The temporary tcp:// hostname and port will appear in this step's output."
+          Write-Host "This repository is public, so workflow logs may be public. Anyone who sees the endpoint can attempt an RDP login; NLA and a strong password are required."
 
-      - name: Keep Windows RDP and ngrok running
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          Write-Host "Windows RDP is available through the active ngrok TCP endpoint."
+          $tunnelStarted = Get-Date
+          $sshLog = Join-Path $env:RUNNER_TEMP "pinggy-ssh.log"
+          $sshArgs = @(
+            "-p", "443",
+            "-o", "UserKnownHostsFile=$knownHosts",
+            "-o", "StrictHostKeyChecking=yes",
+            "-o", "ExitOnForwardFailure=yes",
+            "-o", "ServerAliveInterval=30",
+            "-o", "ServerAliveCountMax=3",
+            "-o", "PreferredAuthentications=password",
+            "-R0:127.0.0.1:3389",
+            "tcp@free.pinggy.io"
+          )
 
-          while ($true) {
-            $ngrokProcess = Get-Process -Name "ngrok" -ErrorAction SilentlyContinue
-            $rdpListener = Get-NetTCPConnection -LocalPort 3389 -State Listen -ErrorAction SilentlyContinue
+          & $ssh.Source @sshArgs 2>&1 | Tee-Object -FilePath $sshLog
+          $sshExitCode = $LASTEXITCODE
+          $elapsed = (Get-Date) - $tunnelStarted
+          $tunnelOutput = if (Test-Path $sshLog) { Get-Content $sshLog -Raw } else { "" }
 
-            if (-not $ngrokProcess) {
-              throw "The ngrok process stopped."
-            }
-            if (-not $rdpListener) {
-              throw "The Windows RDP listener on port 3389 stopped."
-            }
-
-            Write-Host "[$(Get-Date -Format o)] RDP and ngrok are running."
-            Start-Sleep -Seconds 300
+          if ($tunnelOutput -notmatch 'tcp://([A-Za-z0-9.-]+):(\\d+)') {
+            throw "Pinggy did not return a TCP hostname and port. SSH exit code: $sshExitCode. Review the SSH output above."
           }
+
+          if ($elapsed.TotalMinutes -lt 45) {
+            throw "The Pinggy tunnel ended unexpectedly after $([math]::Round($elapsed.TotalMinutes,1)) minutes. SSH exit code: $sshExitCode."
+          }
+
+          Write-Host "Pinggy's free tunnel ended after about an hour. Run this workflow again to create a fresh endpoint."
