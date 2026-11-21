@@ -1,0 +1,45 @@
+version: "3"
+services:
+  guacamole:
+    image: abesnier/guacamole
+    container_name: guacamole
+    volumes:
+      - postgres:/config
+    ports:
+      - 8194:8080
+
+volumes:
+  postgres:
+    driver: local
+```[cite: 1]
+
+---
+
+### 2. How to Install and Start It
+
+1. **Install Docker & Docker Compose**
+   * **Windows / macOS:** Install **Docker Desktop** and start it so the Docker engine is running in the background.
+   * **Linux (Ubuntu/Debian):** Install Docker Engine and the Docker Compose plugin via your package manager, and make sure the `docker` service is active (`sudo systemctl status docker`).
+   * *Verification:* Run `docker compose version` in your terminal and confirm a version number prints without errors.
+
+2. **Create the Compose File**
+   * Create a folder (for example, `guacamole`) and create a file named `docker-compose.yml` inside it containing the YAML code above[cite: 1].
+   * *Verification:* Run `ls -la` (or `dir` on Windows) inside that folder and confirm `docker-compose.yml` is present.
+
+3. **Start the Container**
+   * Open a terminal in that same folder and run:
+     ```bash
+     docker compose up -d
+     ```
+   * Docker will pull the `abesnier/guacamole` image[cite: 1], create the `postgres` volume[cite: 1], and start the container in the background (`-d`).
+   * *Verification:* Run `docker compose ps` and confirm the `guacamole` service is listed with status **Up** and port `8194->8080/tcp`[cite: 1].
+
+4. **Open Guacamole & Change the Default Password**
+   * Open a web browser and go to `http://localhost:8194` (or `http://<your-host-ip>:8194` if accessing from another device on the same network)[cite: 1].
+   * Sign in with the default credentials (`guacadmin` / `guacadmin`), then immediately change your password under **Settings > Users** so your instance isn't left on default credentials.
+   * *Verification:* The Apache Guacamole dashboard loads in your browser and lets you log in with your updated password.
+
+5. **Connect to Your Windows VM (Over RDP)**
+   * On your target Windows VM, turn on **Remote Desktop** (*Settings > System > Remote Desktop*).
+   * In Guacamole, go to **Settings > Connections > New Connection**, select **RDP**, enter your Windows VM's IP address and port `3389`, enter your Windows username and password, and check **Ignore server certificate** if using a self-signed Windows RDP certificate.
+   * *Verification:* Click the saved connection in Guacamole and confirm your Windows VM desktop appears inside the browser window.
