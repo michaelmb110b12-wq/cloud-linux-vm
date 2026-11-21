@@ -1,38 +1,70 @@
-# Apache Guacamole on Hostless
+# Apache Guacamole on Hostless + Windows GitHub Actions runner
 
-This branch deploys the self-contained `abesnier/guacamole` image. It includes the Guacamole web client, `guacd`, and PostgreSQL in one container.
+This branch contains the Hostless Guacamole app and a separate GitHub Actions workflow that starts a temporary Windows runner and makes its RDP service reachable by Guacamole.
 
-## Hostless configuration
+## Part 1: Deploy Guacamole on Hostless
 
-1. Create a Hostless **App** connected to this repository.
-2. Select the `install-windows-vm` branch.
-3. Select the **Docker** build system. The repository's `hostless.yaml` selects `./Dockerfile` and configures a single replica.
-4. Set the app's **container port** to `8080`. The image's Tomcat server listens on port 8080.
-5. Attach a persistent volume mounted at **`/config`**. This is required: the image stores its PostgreSQL database and Guacamole configuration there. Hostless's root filesystem is not persistent.
-6. Deploy the app and open its Hostless URL.
+1. Create a Hostless App connected to this repository and select the install-windows-vm branch.
+2. Select the Docker build system.
+3. Set the container port to 8080.
+4. Attach persistent storage mounted at /config.
+5. Keep the app at one replica.
+6. Deploy and open the Hostless URL.
 
-Keep the app at one replica while using the single `/config` volume. Do not scale it horizontally.
+The Docker image includes the Guacamole web client, guacd, and PostgreSQL in one container.
 
-## First login and security
+## Part 2: Configure the Windows GitHub Actions runner
 
-The image's initial login is `guacadmin` / `guacadmin`. Sign in and change that password immediately before sharing or exposing the URL. Do not commit VM usernames, passwords, or other secrets to this repository.
+The workflow is .github/workflows/windows-guac.yml. It enables RDP on the temporary Windows runner, creates a dedicated non-administrator local account named guacuser, requires Network Level Authentication (NLA), starts an ngrok TCP endpoint for port 3389, and keeps the runner alive until the job ends.
 
-## Connecting to a Windows machine
+### Required GitHub Actions secrets
 
-Guacamole is a remote-desktop gateway; it does **not** create or boot a Windows virtual machine.
+In the GitHub repository, open Settings → Secrets and variables → Actions and create:
 
-To connect a Windows VM, first run that VM on a separate host that supports virtualization and RDP. Enable Remote Desktop on Windows and make sure the Hostless app can reach the VM over the network. In Guacamole, create a new **RDP** connection and enter the Windows machine's reachable hostname/IP, RDP port (normally `3389`), and credentials.
+- NGROK_AUTHTOKEN: your ngrok agent authtoken.
+- WINDOWS_RDP_PASSWORD: a strong password of at least 20 characters for the temporary guacuser Windows account.
 
-A normal Hostless app container is not itself a Windows VM host. Do not assume nested virtualization or `/dev/kvm` access is available unless Hostless explicitly confirms it.
+Do not put either value in the YAML file or commit them to Git.
 
-## Runtime notes
+### ngrok account requirement
 
-- The app listens on container port `8080`; configure Hostless's container port to match.
-- The persistent volume must be mounted at `/config`, not at an arbitrary directory.
-- The included health check probes `/` over HTTP.
-- The default resource profile is one replica, 0.5 vCPU maximum, and 1 GiB memory maximum. Hostless resource allowances are shared across your project, so lower other workloads or adjust the allocation if the project has already used that allowance.
-- Optional environment variable: set `TZ` in Hostless to your preferred IANA time zone.
+Cloudflare Quick Tunnels do not provide the raw TCP endpoint needed for this RDP route, and publishing Cloudflare TCP applications requires a Cloudflare-managed domain. This workflow therefore uses ngrok TCP instead; it does not use Cloudflare, Tailscale, or RustDesk.
 
-## Why there is no docker-compose.yml
+ngrok currently makes TCP endpoints available on its free plan only after a valid payment method is added to the account. The free plan has usage and connection limits. Its free TCP endpoint is randomly assigned, so the hostname and port can change on each workflow run.
 
-Hostless builds this app from a Dockerfile. The selected image already runs the three Guacamole components together, so a Compose deployment is unnecessary.
+### Run the workflow
+
+1. Make sure this workflow file is present on the repository's default branch. GitHub requires a workflow_dispatch workflow to exist on the default branch before it can be manually run.
+2. Open Actions → Windows Cloud PC (Guacamole).
+3. Select Run workflow and optionally change the Chocolatey app list.
+4. Wait for the step Start temporary ngrok TCP endpoint for RDP to complete.
+5. Open your ngrok dashboard at https://dashboard.ngrok.com/endpoints. Find the active TCP endpoint and copy its hostname and port. The address is deliberately not written to this repository's workflow logs because this repository is public.
+6. Keep the Actions job running while you use the Windows desktop.
+
+## Part 3: Add the Windows runner in Guacamole
+
+In Guacamole, open Settings → Connections → New Connection and use:
+
+| Guacamole field | Value |
+|---|---|
+| Name | Windows Cloud PC |
+| Protocol | RDP |
+| Hostname | Host from the active ngrok TCP endpoint |
+| Port | Port from the active ngrok TCP endpoint |
+| Username | guacuser |
+| Password | Value stored in WINDOWS_RDP_PASSWORD |
+| Domain | Leave blank |
+| Security mode | NLA |
+| Ignore server certificate | Enable only if certificate validation fails |
+
+Save the connection and launch it.
+
+## Important lifetime and security notes
+
+- The Windows runner is temporary. GitHub-hosted jobs have a six-hour maximum; this workflow stops at 350 minutes, before that hard limit.
+- The ngrok TCP endpoint is public. RDP is configured to require NLA and a strong password. Do not share the endpoint or password.
+- The workflow does not print the ngrok hostname or port in its logs because the repository is public. Retrieve the active endpoint from your own ngrok dashboard.
+- The random free TCP address can change each run. Update the Guacamole connection's hostname and port after each new workflow run.
+- A reserved, stable TCP address is a paid ngrok feature. No Cloudflare domain is required for this ngrok setup.
+- Guacamole does not create the Windows VM. It provides browser-based access to the temporary Windows GitHub Actions runner.
+- The Windows runner's default wallpaper is left unchanged; no custom branding or desktop note is applied.
