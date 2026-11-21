@@ -1,0 +1,202 @@
+name: Windows Cloud PC (Guacamole)
+
+on:
+  workflow_dispatch:
+    inputs:
+      apps:
+        description: "Optional Chocolatey packages to install (space- or comma-separated)"
+        required: false
+        default: "vlc 7zip notepadplusplus"
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    # GitHub-hosted jobs are limited to six hours. Stop a little before the hard limit.
+    timeout-minutes: 350
+
+    steps:
+      - name: Validate required Actions secrets
+        shell: pwsh
+        env:
+          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
+          WINDOWS_RDP_PASSWORD: ${{ secrets.WINDOWS_RDP_PASSWORD }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ([string]::IsNullOrWhiteSpace($env:NGROK_AUTHTOKEN)) {
+            throw "Add NGROK_AUTHTOKEN under Settings > Secrets and variables > Actions."
+          }
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_RDP_PASSWORD)) {
+            throw "Add WINDOWS_RDP_PASSWORD under Settings > Secrets and variables > Actions."
+          }
+          if ($env:WINDOWS_RDP_PASSWORD.Length -lt 20) {
+            throw "WINDOWS_RDP_PASSWORD must be at least 20 characters."
+          }
+          if ($env:WINDOWS_RDP_PASSWORD.Contains([char]13) -or $env:WINDOWS_RDP_PASSWORD.Contains([char]10)) {
+            throw "WINDOWS_RDP_PASSWORD cannot contain line breaks."
+          }
+          Write-Host "Required secrets are present."
+
+      - name: Enable Windows RDP with a dedicated non-admin account
+        shell: pwsh
+        env:
+          WINDOWS_RDP_PASSWORD: ${{ secrets.WINDOWS_RDP_PASSWORD }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $rdpUser = "guacuser"
+          $securePassword = ConvertTo-SecureString $env:WINDOWS_RDP_PASSWORD -AsPlainText -Force
+          $existingUser = Get-LocalUser -Name $rdpUser -ErrorAction SilentlyContinue
+
+          if ($existingUser) {
+            Set-LocalUser -Name $rdpUser -Password $securePassword
+            Enable-LocalUser -Name $rdpUser
+          } else {
+            New-LocalUser -Name $rdpUser -Password $securePassword -Description "RDP account for Apache Guacamole" -PasswordNeverExpires | Out-Null
+          }
+
+          $rdpGroup = Get-LocalGroup -SID "S-1-5-32-555"
+          Add-LocalGroupMember -Group $rdpGroup.Name -Member $rdpUser -ErrorAction SilentlyContinue
+
+          $terminalServerKey = "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server"
+          $rdpTcpKey = "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp"
+
+          Set-ItemProperty -Path $terminalServerKey -Name fDenyTSConnections -Value 0
+          Set-ItemProperty -Path $rdpTcpKey -Name UserAuthentication -Value 1
+          Set-ItemProperty -Path $rdpTcpKey -Name SecurityLayer -Value 2
+
+          Set-Service -Name TermService -StartupType Automatic
+          Start-Service -Name TermService
+
+          Get-NetFirewallRule -DisplayGroup "Remote Desktop" | Enable-NetFirewallRule
+
+          $rdpReady = $false
+          for ($i = 1; $i -le 20; $i++) {
+            if (Get-NetTCPConnection -LocalPort 3389 -State Listen -ErrorAction SilentlyContinue) {
+              $rdpReady = $true
+              break
+            }
+            Start-Sleep -Seconds 2
+          }
+
+          if (-not $rdpReady) {
+            throw "Windows RDP did not start listening on TCP port 3389."
+          }
+
+          Write-Host "RDP is listening. Dedicated account: $rdpUser. NLA is required."
+
+      - name: Install optional apps
+        shell: pwsh
+        env:
+          APPS: ${{ inputs.apps }}
+        run: |
+          $ErrorActionPreference = "Continue"
+          if ([string]::IsNullOrWhiteSpace($env:APPS)) {
+            Write-Host "No optional apps requested."
+            exit 0
+          }
+
+          $packages = $env:APPS -split '[\s,]+' | Where-Object { $_ }
+          $failed = @()
+
+          foreach ($package in $packages) {
+            Write-Host "Installing $package..."
+            choco install $package -y --no-progress
+            if ($LASTEXITCODE -ne 0) {
+              $failed += $package
+            }
+          }
+
+          if ($failed.Count -gt 0) {
+            Write-Warning "These optional packages failed: $($failed -join ', ')"
+          }
+
+      - name: Start temporary ngrok TCP endpoint for RDP
+        shell: pwsh
+        env:
+          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $zipPath = Join-Path $env:RUNNER_TEMP "ngrok-windows-amd64.zip"
+          $ngrokDir = Join-Path $env:RUNNER_TEMP "ngrok"
+          $downloadUrl = "https://bin.ngrok.com/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip"
+
+          Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath
+          New-Item -ItemType Directory -Path $ngrokDir -Force | Out-Null
+          Expand-Archive -Path $zipPath -DestinationPath $ngrokDir -Force
+
+          $ngrokExe = Join-Path $ngrokDir "ngrok.exe"
+          if (-not (Test-Path $ngrokExe)) {
+            throw "ngrok.exe was not found after extraction."
+          }
+
+          & $ngrokExe config add-authtoken $env:NGROK_AUTHTOKEN
+          if ($LASTEXITCODE -ne 0) {
+            throw "ngrok rejected NGROK_AUTHTOKEN."
+          }
+
+          $stdoutPath = Join-Path $env:RUNNER_TEMP "ngrok.stdout.log"
+          $stderrPath = Join-Path $env:RUNNER_TEMP "ngrok.stderr.log"
+
+          Start-Process -FilePath $ngrokExe -ArgumentList "tcp 3389 --log=stdout --web-addr=127.0.0.1:4040" -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath | Out-Null
+
+          $endpointReady = $false
+          for ($attempt = 1; $attempt -le 40; $attempt++) {
+            try {
+              $agent = Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels" -TimeoutSec 3
+              $tcpTunnel = @($agent.tunnels) | Where-Object { $_.proto -eq "tcp" } | Select-Object -First 1
+              if ($tcpTunnel -and $tcpTunnel.public_url) {
+                $endpointReady = $true
+                break
+              }
+            } catch {
+              # The local API may not be ready yet.
+            }
+            Start-Sleep -Seconds 3
+          }
+
+          if (-not $endpointReady) {
+            Write-Host "ngrok failed to create a TCP endpoint. Check the ngrok dashboard and account requirements."
+            throw "ngrok did not create a TCP endpoint for RDP."
+          }
+
+          @"
+          ## Guacamole RDP endpoint is running
+
+          - Windows RDP: listening on TCP port 3389
+          - Windows username: guacuser
+          - Windows password: the repository Actions secret WINDOWS_RDP_PASSWORD
+          - Authentication: Network Level Authentication (NLA)
+
+          **Find the temporary TCP hostname and port:** open your ngrok dashboard at https://dashboard.ngrok.com/endpoints and copy the active TCP endpoint. The address is intentionally not printed in this public repository's workflow logs.
+
+          In Guacamole, create an RDP connection using that hostname and port, username guacuser, your secret password, and security mode NLA. Leave the domain blank. Enable Ignore server certificate only if Guacamole reports that the Windows RDP certificate cannot be validated.
+
+          The endpoint exists only while this GitHub Actions job is running. It may change every time the workflow is started again.
+          "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+          Write-Host "ngrok TCP endpoint is active. Its public address is available in the ngrok dashboard, not in these public logs."
+
+      - name: Keep Windows RDP and ngrok running
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Write-Host "Windows RDP is available through the active ngrok TCP endpoint."
+
+          while ($true) {
+            $ngrokProcess = Get-Process -Name "ngrok" -ErrorAction SilentlyContinue
+            $rdpListener = Get-NetTCPConnection -LocalPort 3389 -State Listen -ErrorAction SilentlyContinue
+
+            if (-not $ngrokProcess) {
+              throw "The ngrok process stopped."
+            }
+            if (-not $rdpListener) {
+              throw "The Windows RDP listener on port 3389 stopped."
+            }
+
+            Write-Host "[$(Get-Date -Format o)] RDP and ngrok are running."
+            Start-Sleep -Seconds 300
+          }
