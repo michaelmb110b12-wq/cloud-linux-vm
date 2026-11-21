@@ -14,7 +14,8 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
-    timeout-minutes: 65
+    # Allows time for optional app installs plus Pinggy's approximately 60-minute tunnel.
+    timeout-minutes: 90
 
     steps:
       - name: Validate the Windows RDP password secret
@@ -46,7 +47,7 @@ jobs:
           $existingUser = Get-LocalUser -Name $rdpUser -ErrorAction SilentlyContinue
 
           if ($existingUser) {
-            Set-LocalUser -Name $rdpUser -Password $securePassword
+            Set-LocalUser -Name $rdpUser -Password $securePassword -PasswordNeverExpires $true
             Enable-LocalUser -Name $rdpUser
           } else {
             New-LocalUser -Name $rdpUser -Password $securePassword -Description "RDP account for Apache Guacamole" -PasswordNeverExpires | Out-Null
@@ -65,6 +66,7 @@ jobs:
           Set-Service -Name TermService -StartupType Automatic
           Start-Service -Name TermService
 
+          # The SSH reverse tunnel connects to 127.0.0.1:3389, so RDP is allowed only from loopback.
           $rdpRules = Get-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction Stop
           $rdpRules | Enable-NetFirewallRule
           $rdpRules | Get-NetFirewallAddressFilter | Set-NetFirewallAddressFilter -RemoteAddress "127.0.0.1","::1"
@@ -95,7 +97,7 @@ jobs:
             exit 0
           }
 
-          $packages = $env:APPS -split '[\\s,]+' | Where-Object { $_ }
+          $packages = $env:APPS -split '[\s,]+' | Where-Object { $_ }
           $failed = @()
 
           foreach ($package in $packages) {
@@ -124,7 +126,7 @@ jobs:
 
           $knownHosts = Join-Path $env:RUNNER_TEMP "pinggy_known_hosts"
           $scannedKeys = & $keyscan.Source -p 443 free.pinggy.io 2>$null
-          $rsaKeys = @($scannedKeys | Where-Object { $_ -match '\\s+ssh-rsa\\s+' })
+          $rsaKeys = @($scannedKeys | Where-Object { $_ -match '\s+ssh-rsa\s+' })
           if ($rsaKeys.Count -eq 0) {
             throw "Could not retrieve Pinggy's RSA SSH host key."
           }
@@ -137,6 +139,7 @@ jobs:
           }
           Write-Host "Pinggy SSH host key verified."
 
+          # If Pinggy requests its documented empty password, answer it without an interactive console.
           $askPassSource = @'
           using System;
           public static class PinggyEmptyAskPass {
@@ -189,7 +192,7 @@ jobs:
           $elapsed = (Get-Date) - $tunnelStarted
           $tunnelOutput = if (Test-Path $sshLog) { Get-Content $sshLog -Raw } else { "" }
 
-          if ($tunnelOutput -notmatch 'tcp://([A-Za-z0-9.-]+):(\\d+)') {
+          if ($tunnelOutput -notmatch 'tcp://([A-Za-z0-9.-]+):(\d+)') {
             throw "Pinggy did not return a TCP hostname and port. SSH exit code: $sshExitCode. Review the SSH output above."
           }
 
