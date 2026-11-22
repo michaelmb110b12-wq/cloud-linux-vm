@@ -7,12 +7,18 @@ This repository deploys Apache Guacamole as a browser-based remote desktop gatew
 1. Connect your Hostless App to this repository and select the main branch.
 2. Use the Docker build system and the repository's Dockerfile.
 3. Set the container port to 8080.
-4. Leave the Start Command empty so the image's startup process runs.
-5. Do **not** attach a disk. The Dockerfile redirects the bundled PostgreSQL database, Guacamole configuration and PostgreSQL socket to Hostless's writable temporary /tmp area.
+4. Leave the Start Command empty so the Dockerfile entrypoint runs.
+5. Do not attach a disk. The Dockerfile redirects Guacamole/PostgreSQL state and the s6-overlay runtime directory to Hostless's writable temporary /tmp area.
 6. Keep one replica.
 7. Deploy or redeploy the app.
 
 The image includes the Guacamole web client, guacd and PostgreSQL. It enables the QuickConnect extension so you can enter RDP details without saving a connection profile.
+
+## Why the custom entrypoint is needed
+
+Hostless makes the image filesystem read-only. The bundled s6-overlay normally cleans and creates runtime files under /run. This image redirects /run to /tmp/run before starting /init and enables S6_READ_ONLY_ROOT=1 so s6-overlay follows its read-only-root startup path.
+
+The s6-overlay documentation requires /run to be writable in read-only-root mode. This setup relies on Hostless's writable /tmp mount being writable and executable. If Hostless mounts /tmp with noexec or does not allow the symlinked /run path, the runtime still cannot start; check the new runtime logs for the next specific error.
 
 ## Important: temporary data only
 
@@ -25,7 +31,7 @@ That means:
 - QuickConnect itself does not save connection profiles, so you can type the Windows VPS details again after signing in.
 - Hostless documents a 500 MiB limit for /tmp. Keep this as a small, temporary gateway; do not use it to store recordings or large files.
 
-Change the initial Guacamole password after each fresh start. Do not expose the public Guacamole URL without protecting access to it. Do not reuse your Windows VPS password elsewhere.
+Change the initial Guacamole password after each fresh start. Do not expose the public Guacamole URL without protecting access to it.
 
 ## Connect to a Windows VPS by entering its details
 
@@ -45,21 +51,6 @@ Example using documentation-only placeholder values:
 
 The IP above is reserved for examples and will not connect to a real VPS.
 
-## RDP connection details
-
-| Item | What to enter |
-|---|---|
-| Protocol | RDP |
-| Host | Public IPv4 address or DNS name of the Windows VPS |
-| Port | Usually 3389, unless the provider specifies another port |
-| Username | Windows account username |
-| Password | Enter when prompted; do not put it in the URI |
-| Security | NLA if the Windows VPS requires Network Level Authentication |
-
-The address must be reachable from the Hostless Guacamole container, not merely from your own computer. The VPS must have Remote Desktop enabled and its provider firewall must permit inbound RDP from the Guacamole server. Restrict the source to Hostless's outbound IP if Hostless provides a stable one; avoid exposing RDP/3389 to the entire internet.
-
-If the VPS provider only allows RDP from a private network, or Hostless cannot reach the VPS IP/port, QuickConnect cannot bypass that restriction; a private network or tunnel would be needed.
-
 ## Runtime settings
 
 - Build system: Docker
@@ -71,7 +62,12 @@ If the VPS provider only allows RDP from a private network, or Hostless cannot r
 - Replicas: 1
 - Persistent disk: none
 - Health check: HTTP /
-- Hostless config file: hostless.yaml
+
+## Network and security requirements
+
+The Windows VPS address must be reachable from the Hostless Guacamole container, not merely from your own computer. The VPS must have Remote Desktop enabled and its provider firewall must permit inbound RDP from the Guacamole server. Restrict the source to Hostless's outbound IP if Hostless provides a stable one; avoid exposing RDP/3389 to the entire internet.
+
+If the VPS provider only allows RDP from a private network, or Hostless cannot reach the VPS IP/port, QuickConnect cannot bypass that restriction; a private network or tunnel would be needed.
 
 ## QuickConnect security note
 
