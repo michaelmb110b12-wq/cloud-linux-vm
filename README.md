@@ -1,6 +1,6 @@
 # Apache Guacamole on Hostless (diskless mode)
 
-This repository deploys Apache Guacamole as a browser-based remote desktop gateway. It does not host or create a Windows VM; connect it to a separate Windows VPS using that VPS's reachable IP address and RDP port.
+This repository deploys Apache Guacamole as a browser-based remote desktop gateway. It does not host or create the Windows VM; connect it to a separate Windows VPS using that VPS's reachable IP address and RDP port.
 
 ## Hostless deployment — no paid disk required
 
@@ -8,17 +8,17 @@ This repository deploys Apache Guacamole as a browser-based remote desktop gatew
 2. Use the Docker build system and the repository's Dockerfile.
 3. Set the container port to 8080.
 4. Leave the Start Command empty so the Dockerfile entrypoint runs.
-5. Do not attach a disk. The Dockerfile redirects Guacamole/PostgreSQL state and the s6-overlay runtime directory to Hostless's writable temporary /tmp area.
+5. Do not attach a disk. The custom entrypoint stores temporary Guacamole and PostgreSQL state under Hostless's writable /tmp directory.
 6. Keep one replica.
 7. Deploy or redeploy the app.
 
 The image includes the Guacamole web client, guacd and PostgreSQL. It enables the QuickConnect extension so you can enter RDP details without saving a connection profile.
 
-## Why the custom entrypoint is needed
+## Why startup bypasses s6-overlay
 
-Hostless makes the image filesystem read-only. The bundled s6-overlay normally cleans and creates runtime files under /run. This image redirects /run to /tmp/run before starting /init and enables S6_READ_ONLY_ROOT=1 so s6-overlay follows its read-only-root startup path.
+Hostless mounts the root filesystem read-only and mounts /var/run as a read-only directory. The base image's s6-overlay preinit requires /var/run to be a symlink to /run and tries to replace it if it is not. That cannot succeed when /var/run is a read-only mount.
 
-The s6-overlay documentation requires /run to be writable in read-only-root mode. This setup relies on Hostless's writable /tmp mount being writable and executable. If Hostless mounts /tmp with noexec or does not allow the symlinked /run path, the runtime still cannot start; check the new runtime logs for the next specific error.
+The custom entrypoint therefore does not invoke /init or s6-overlay. It starts PostgreSQL, guacd and Tomcat directly. PostgreSQL listens only on 127.0.0.1; its trust authentication is restricted to loopback inside this single container. Tomcat's work, temp, logs and PostgreSQL data are placed under /tmp.
 
 ## Important: temporary data only
 
