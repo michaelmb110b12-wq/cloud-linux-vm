@@ -15,7 +15,7 @@ ENV GUACAMOLE_HOME=/tmp/guac-state/guacamole \
     CATALINA_TMPDIR=/tmp/guac-state/tomcat-temp \
     EXTENSIONS=auth-quickconnect
 
-WORKDIR /tmp/guac-state
+WORKDIR /
 EXPOSE 8080
 
 # Do not invoke the base image's /init (s6-overlay). Hostless mounts /var/run
