@@ -46,11 +46,18 @@ if [ ! -d "$CATALINA_BASE/conf" ]; then
   mkdir -p "$CATALINA_BASE"
   cp -a "$CATALINA_HOME/conf" "$CATALINA_BASE/conf"
 fi
-if [ ! -e "$CATALINA_BASE/webapps" ]; then
-  ln -s "$CATALINA_HOME/webapps" "$CATALINA_BASE/webapps"
+# Tomcat's webapp appBase must be writable so Guacamole can be unpacked
+# outside the read-only image. Jersey's package scanner cannot scan the
+# nested war: URI produced when unpackWARs=false.
+if [ -L "$CATALINA_BASE/webapps" ]; then
+  rm "$CATALINA_BASE/webapps"
 fi
-if grep -q 'unpackWARs="true"' "$CATALINA_BASE/conf/server.xml"; then
-  sed -i 's/unpackWARs="true"/unpackWARs="false"/g' "$CATALINA_BASE/conf/server.xml"
+mkdir -p "$CATALINA_BASE/webapps"
+[ -f "$CATALINA_HOME/webapps/ROOT.war" ] || fail "Guacamole ROOT.war not found"
+rm -rf "$CATALINA_BASE/webapps/ROOT"
+cp -f "$CATALINA_HOME/webapps/ROOT.war" "$CATALINA_BASE/webapps/ROOT.war"
+if grep -q 'unpackWARs="false"' "$CATALINA_BASE/conf/server.xml"; then
+  sed -i 's/unpackWARs="false"/unpackWARs="true"/g' "$CATALINA_BASE/conf/server.xml"
 fi
 if grep -q 'autoDeploy="true"' "$CATALINA_BASE/conf/server.xml"; then
   sed -i 's/autoDeploy="true"/autoDeploy="false"/g' "$CATALINA_BASE/conf/server.xml"
