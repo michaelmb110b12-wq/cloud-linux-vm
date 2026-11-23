@@ -23,22 +23,22 @@ export PATH="/command:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/b
 : "${CATALINA_BASE:=/tmp/guac-state/tomcat-base}"
 : "${CATALINA_TMPDIR:=/tmp/guac-state/tomcat-temp}"
 : "${GUACD_LOG_LEVEL:=info}"
+: "${HOME:=/tmp/guac-state/home}"
+: "${TMPDIR:=/tmp/guac-state/tmp}"
 : "${GUAC_VER:=1.6.0}"
 
 PG_BIN="/usr/lib/postgresql/${PG_MAJOR}/bin"
-SETUIDGID="$(command -v s6-setuidgid || true)"
 
 [ -x "$PG_BIN/initdb" ] || fail "PostgreSQL initdb not found at $PG_BIN/initdb"
 [ -x "$PG_BIN/postgres" ] || fail "PostgreSQL server binary not found"
 [ -x "$PG_BIN/pg_isready" ] || fail "pg_isready not found"
 [ -x "$CATALINA_HOME/bin/catalina.sh" ] || fail "Tomcat catalina.sh not found"
 [ -x /usr/local/sbin/guacd ] || fail "guacd not found"
-[ -n "$SETUIDGID" ] || fail "s6-setuidgid helper is missing from the image"
 
 # Every mutable path is under Hostless's documented writable /tmp directory.
 mkdir -p "$PGDATA" "$PGHOST" "$GUACAMOLE_HOME" "$CATALINA_TMPDIR" \
   "$CATALINA_BASE/logs" "$CATALINA_BASE/temp" "$CATALINA_BASE/work" \
-  /tmp/guac-state/tomcat-work /root/.config/freerdp/known_hosts
+  /tmp/guac-state/tomcat-work "$HOME/.config/freerdp/known_hosts" "$TMPDIR"
 
 # Prepare a separate Tomcat runtime base under /tmp. Its webapps directory is
 # read-only, so WARs must be deployed directly without unpacking.
@@ -79,14 +79,13 @@ else
   sed -i 's/^guacd-hostname:.*/guacd-hostname: 127.0.0.1/' "$GUAC_PROPERTIES"
 fi
 
-# PostgreSQL must run as its own unprivileged service user.
-chown -R postgres:postgres "$PGDATA" "$PGHOST"
+# The container itself runs as the unprivileged postgres user; no chown is needed.
 chmod 0700 "$PGDATA"
 chmod 0755 "$PGHOST"
 
 if [ ! -s "$PGDATA/PG_VERSION" ]; then
   log "Initializing temporary PostgreSQL data directory"
-  "$SETUIDGID" postgres "$PG_BIN/initdb" -D "$PGDATA" --auth-local=trust --auth-host=trust
+  "$PG_BIN/initdb" -D "$PGDATA" --auth-local=trust --auth-host=trust
 fi
 
 # PostgreSQL is reachable only over loopback; trust authentication is confined
@@ -104,7 +103,6 @@ port = ${PGPORT}
 unix_socket_directories = '${PGHOST}'
 logging_collector = off
 PGCONF
-chown postgres:postgres "$PGDATA/pg_hba.conf" "$PGDATA/postgresql.conf"
 
 PG_PID=""
 GUACD_PID=""
@@ -122,8 +120,9 @@ shutdown() {
 }
 trap shutdown EXIT INT TERM
 
-log "Starting PostgreSQL on loopback"
-"$SETUIDGID" postgres "$PG_BIN/postgres" -D "$PGDATA" \
+export HOME TMPDIR
+log "Starting PostgreSQL as the unprivileged container user on loopback"
+"$PG_BIN/postgres" -D "$PGDATA" \
   -c "listen_addresses=127.0.0.1" \
   -c "unix_socket_directories=$PGHOST" \
   -c "port=$PGPORT" &
