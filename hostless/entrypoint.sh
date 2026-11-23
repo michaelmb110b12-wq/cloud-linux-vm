@@ -69,8 +69,13 @@ fi
 if ! grep -q '<Connector port="' "$CATALINA_BASE/conf/server.xml"; then
   fail "Could not find the HTTP Connector in Tomcat server.xml"
 fi
-sed -i "0,/<Connector port=\"[0-9][0-9]*\"/s//<Connector port=\"$PORT\"/" "$CATALINA_BASE/conf/server.xml"
-log "Configured Tomcat HTTP Connector for Hostless PORT=$PORT"
+# Bind the public HTTP listener on every interface, not just loopback.
+# Hostless's router and TCP readiness probe connect from outside the container.
+sed -i "0,/<Connector port=\"[0-9][0-9]*\"/s//<Connector address=\"0.0.0.0\" port=\"$PORT\"/" "$CATALINA_BASE/conf/server.xml"
+log "Configured Tomcat HTTP Connector for Hostless PORT=$PORT on 0.0.0.0"
+PORT_HEX="$(printf '%04X' "$PORT")"
+log "TCP listener entries for port $PORT (hex $PORT_HEX):"
+awk -v suffix=":$PORT_HEX" 'NR == 1 { next } toupper($2) ~ (suffix "$") { print }' /proc/net/tcp /proc/net/tcp6 || true
 
 # Hostless exposes container stdout/stderr, not files under the ephemeral
 # CATALINA_BASE. Forward Tomcat's localhost webapp errors there so startup
