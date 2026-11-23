@@ -16,5 +16,5 @@ scaling:
 
 health_check:
   type: http
-  http_path: /
+  http_path: /guacamole/
   interval_in_seconds: 10
