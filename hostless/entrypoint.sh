@@ -13,6 +13,7 @@ fail() {
 export PATH="/command:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 
 : "${PG_MAJOR:=17}"
+: "${PORT:=8080}"
 : "${PGDATA:=/tmp/guac-state/postgres}"
 : "${PGHOST:=/tmp/guac-state/run-postgresql}"
 : "${PGPORT:=5432}"
@@ -62,6 +63,14 @@ fi
 if grep -q 'autoDeploy="true"' "$CATALINA_BASE/conf/server.xml"; then
   sed -i 's/autoDeploy="true"/autoDeploy="false"/g' "$CATALINA_BASE/conf/server.xml"
 fi
+
+# Hostless supplies PORT at runtime. Tomcat must listen on that exact port.
+[[ "$PORT" =~ ^[0-9]+$ ]] || fail "Hostless PORT must be a numeric TCP port; got: $PORT"
+if ! grep -q '<Connector port="' "$CATALINA_BASE/conf/server.xml"; then
+  fail "Could not find the HTTP Connector in Tomcat server.xml"
+fi
+sed -i "0,/<Connector port=\"[0-9][0-9]*\"/s//<Connector port=\"$PORT\"/" "$CATALINA_BASE/conf/server.xml"
+log "Configured Tomcat HTTP Connector for Hostless PORT=$PORT"
 
 # Hostless exposes container stdout/stderr, not files under the ephemeral
 # CATALINA_BASE. Forward Tomcat's localhost webapp errors there so startup
