@@ -56,6 +56,17 @@ if grep -q 'autoDeploy="true"' "$CATALINA_BASE/conf/server.xml"; then
   sed -i 's/autoDeploy="true"/autoDeploy="false"/g' "$CATALINA_BASE/conf/server.xml"
 fi
 
+# Hostless exposes container stdout/stderr, not files under the ephemeral
+# CATALINA_BASE. Forward Tomcat's localhost webapp errors there so startup
+# failures (including filter exceptions) include their real stack traces.
+cat >> "$CATALINA_BASE/conf/logging.properties" <<'LOGGING'
+java.util.logging.ConsoleHandler.level = ALL
+java.util.logging.ConsoleHandler.formatter = org.apache.juli.OneLineFormatter
+org.apache.catalina.core.ContainerBase.[Catalina].[localhost].level = INFO
+org.apache.catalina.core.ContainerBase.[Catalina].[localhost].handlers = java.util.logging.ConsoleHandler
+org.apache.catalina.core.ContainerBase.[Catalina].[localhost].useParentHandlers = false
+LOGGING
+
 # Stage Guacamole's supplied configuration and JDBC/QuickConnect extensions.
 cp -a /app/guacamole/. "$GUACAMOLE_HOME"/
 mkdir -p "$GUACAMOLE_HOME/extensions" "$GUACAMOLE_HOME/extensions-available"
