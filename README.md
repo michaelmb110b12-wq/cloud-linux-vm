@@ -14,22 +14,23 @@ This repository deploys Apache Guacamole as a browser-based remote desktop gatew
 
 The image includes the Guacamole web client, guacd and PostgreSQL. It enables the QuickConnect extension so you can enter RDP details without saving a connection profile.
 
-## Why startup bypasses s6-overlay
+## Runtime model for Hostless
 
-Hostless mounts the root filesystem read-only and mounts /var/run as a read-only directory. The base image's s6-overlay preinit requires /var/run to be a symlink to /run and tries to replace it if it is not. That cannot succeed when /var/run is a read-only mount.
+Hostless mounts the root filesystem read-only and mounts /var/run as a read-only directory. The base image's s6-overlay preinit tries to replace /var/run with a symlink to /run. That fails on Hostless.
 
-The custom entrypoint therefore does not invoke /init or s6-overlay. It starts PostgreSQL, guacd and Tomcat directly. PostgreSQL listens only on 127.0.0.1; its trust authentication is restricted to loopback inside this single container. Tomcat's work, temp, logs and PostgreSQL data are placed under /tmp.
+The custom Dockerfile entrypoint bypasses /init and starts PostgreSQL, guacd and Tomcat directly. The Dockerfile sets the container user to the unprivileged postgres account. This is important: Hostless does not allow chown operations on its temporary filesystem, so the process creates PostgreSQL's data directory as the postgres user from the beginning.
+
+If runtime logs show /package/admin/s6-overlay/libexec/preinit, verify that Hostless deployed the newest commit, uses the Docker build system and has an empty Start Command. Hostless's Docker Start Command replaces CMD, while the image's ENTRYPOINT is defined in the Dockerfile.
 
 ## Important: temporary data only
 
-Hostless's /tmp area is writable but is cleared when the app process starts again. This diskless configuration is intended for temporary use and avoids creating a paid persistent disk.
+Hostless's /tmp area is writable but is cleared when the app process starts again. This diskless configuration avoids creating a paid persistent disk, but all Guacamole database state is temporary.
 
-That means:
-- Guacamole's local PostgreSQL database is recreated after a restart or redeploy.
-- The initial Guacamole login returns to the image/schema default (normally guacadmin / guacadmin) after a fresh database initialization.
-- Any changed Guacamole password, saved connections, users, history and other local database records are lost on restart.
-- QuickConnect itself does not save connection profiles, so you can type the Windows VPS details again after signing in.
-- Hostless documents a 500 MiB limit for /tmp. Keep this as a small, temporary gateway; do not use it to store recordings or large files.
+- The PostgreSQL database is recreated after a restart or redeploy.
+- The initial Guacamole login returns to the image/schema default (normally guacadmin / guacadmin) after fresh initialization.
+- Changed Guacamole passwords, saved connections, users, history and other local database records are lost on restart.
+- QuickConnect itself does not save connection profiles, so you can enter the Windows VPS details again after signing in.
+- Hostless documents a 500 MiB limit for /tmp. Do not use it to store recordings or large files.
 
 Change the initial Guacamole password after each fresh start. Do not expose the public Guacamole URL without protecting access to it.
 
