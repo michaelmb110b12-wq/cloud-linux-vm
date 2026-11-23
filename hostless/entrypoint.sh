@@ -122,6 +122,7 @@ TOMCAT_PID=""
 shutdown() {
   log "Stopping Guacamole services"
   set +e
+  [ -n "$TOMCAT_LOG_PID" ] && kill -TERM "$TOMCAT_LOG_PID" 2>/dev/null
   [ -n "$TOMCAT_PID" ] && kill -TERM "$TOMCAT_PID" 2>/dev/null
   [ -n "$GUACD_PID" ] && kill -TERM "$GUACD_PID" 2>/dev/null
   [ -n "$PG_PID" ] && kill -TERM "$PG_PID" 2>/dev/null
@@ -165,6 +166,23 @@ fi
 log "Starting guacd"
  /usr/local/sbin/guacd -b 127.0.0.1 -L "$GUACD_LOG_LEVEL" -f &
 GUACD_PID=$!
+
+# Tomcat writes the detailed filter/listener startup exception to
+# localhost.YYYY-MM-DD.log under CATALINA_BASE/logs. Hostless only displays
+# container stdout/stderr, so forward that file to stdout for diagnosis.
+TOMCAT_LOG_PID=""
+(
+  set +e
+  while true; do
+    shopt -s nullglob
+    log_files=("$CATALINA_BASE"/logs/localhost*.log)
+    if [ "${#log_files[@]}" -gt 0 ]; then
+      exec tail -n +1 -F "${log_files[@]}"
+    fi
+    sleep 1
+  done
+) &
+TOMCAT_LOG_PID=$!
 
 log "Starting Tomcat / Guacamole on port 8080"
 export CATALINA_HOME CATALINA_BASE CATALINA_TMPDIR GUACAMOLE_HOME
