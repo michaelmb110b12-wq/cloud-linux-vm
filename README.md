@@ -22,6 +22,19 @@ The custom Dockerfile entrypoint bypasses /init and starts PostgreSQL, guacd and
 
 If runtime logs show /package/admin/s6-overlay/libexec/preinit, verify that Hostless deployed the newest commit, uses the Docker build system and has an empty Start Command. Hostless's Docker Start Command replaces CMD, while the image's ENTRYPOINT is defined in the Dockerfile.
 
+## Automatic InstaBox desktop tunnel
+
+The app image includes the InstaBox CLI and OpenSSH client. When the Guacamole app starts, its entrypoint launches a background supervisor that:
+
+- Checks the state of the `linux-guaq` machine.
+- Starts it if stopped, or resumes it if paused.
+- Waits for it to report Running.
+- Opens and continuously retries the VNC tunnel from `127.0.0.1:15901` to port `5901` on the InstaBox machine.
+
+Keep the existing Hostless app environment variable `INSTABOX_API_KEY` configured. The supervisor does not print the key. Optional settings are `INSTABOX_MACHINE` (default `linux-guaq`), `INSTABOX_LOCAL_PORT` (default `15901`), and `INSTABOX_REMOTE_PORT` (default `5901`).
+
+The tunnel runs inside the Guacamole app process environment, not an embedded Hostless worker. This is intentional: Guacamole connects to `127.0.0.1:15901`, and a separate worker has a different localhost. The supervisor restarts the tunnel if it exits.
+
 ## Important: temporary data only
 
 Hostless's /tmp area is writable but is cleared when the app process starts again. This diskless configuration avoids creating a paid persistent disk, but all Guacamole database state is temporary.
