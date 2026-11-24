@@ -27,10 +27,6 @@ export PATH="/command:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/b
 : "${HOME:=/tmp/guac-state/home}"
 : "${TMPDIR:=/tmp/guac-state/tmp}"
 : "${GUAC_VER:=1.6.0}"
-: "${INSTABOX_LOCAL_PORT:=15901}"
-: "${INSTABOX_REMOTE_PORT:=5901}"
-: "${INSTABOX_API_URL:=https://api.instabox.sh}"
-export INSTABOX_API_URL
 
 PG_BIN="/usr/lib/postgresql/${PG_MAJOR}/bin"
 
@@ -143,8 +139,6 @@ PGCONF
 PG_PID=""
 GUACD_PID=""
 TOMCAT_PID=""
-TOMCAT_LOG_PID=""
-INSTABOX_TUNNEL_PID=""
 
 shutdown() {
   log "Stopping Guacamole services"
@@ -153,11 +147,9 @@ shutdown() {
   [ -n "$TOMCAT_PID" ] && kill -TERM "$TOMCAT_PID" 2>/dev/null
   [ -n "$GUACD_PID" ] && kill -TERM "$GUACD_PID" 2>/dev/null
   [ -n "$PG_PID" ] && kill -TERM "$PG_PID" 2>/dev/null
-  [ -n "$INSTABOX_TUNNEL_PID" ] && kill -TERM "$INSTABOX_TUNNEL_PID" 2>/dev/null
   [ -n "$TOMCAT_PID" ] && wait "$TOMCAT_PID" 2>/dev/null
   [ -n "$GUACD_PID" ] && wait "$GUACD_PID" 2>/dev/null
   [ -n "$PG_PID" ] && wait "$PG_PID" 2>/dev/null
-  [ -n "$INSTABOX_TUNNEL_PID" ] && wait "$INSTABOX_TUNNEL_PID" 2>/dev/null
 }
 trap shutdown EXIT INT TERM
 
@@ -192,24 +184,6 @@ if ! "$PG_BIN/psql" -h "$PGHOST" -p "$PGPORT" -U postgres -d postgres -tAc \
       -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -f -
 fi
 
-# Start an optional private tunnel from this Guacamole container to the VNC
-# server already running inside the user's InstaBox machine. The CLI listens
-# locally on 127.0.0.1; guacd will connect to that local forwarded port.
-if [ -n "${INSTABOX_MACHINE:-}" ]; then
-  if [ -z "${INSTABOX_API_KEY:-}" ]; then
-    log "WARNING: INSTABOX_MACHINE is set but INSTABOX_API_KEY is missing; InstaBox bridge is disabled"
-  else
-    [[ "$INSTABOX_LOCAL_PORT" =~ ^[0-9]+$ ]] || fail "INSTABOX_LOCAL_PORT must be numeric"
-    [[ "$INSTABOX_REMOTE_PORT" =~ ^[0-9]+$ ]] || fail "INSTABOX_REMOTE_PORT must be numeric"
-    [ -x /usr/local/bin/instabox ] || fail "InstaBox CLI was not installed in the image"
-    log "Starting private InstaBox VNC tunnel: machine=$INSTABOX_MACHINE local=127.0.0.1:$INSTABOX_LOCAL_PORT remote=127.0.0.1:$INSTABOX_REMOTE_PORT"
-    /usr/local/bin/instabox port-forward "$INSTABOX_MACHINE" "${INSTABOX_LOCAL_PORT}:${INSTABOX_REMOTE_PORT}" &
-    INSTABOX_TUNNEL_PID=$!
-  fi
-else
-  log "InstaBox bridge disabled; set INSTABOX_MACHINE in Hostless environment variables to enable it"
-fi
-
 log "Starting guacd"
  /usr/local/sbin/guacd -b 127.0.0.1 -L "$GUACD_LOG_LEVEL" -f &
 GUACD_PID=$!
@@ -217,6 +191,7 @@ GUACD_PID=$!
 # Tomcat writes the detailed filter/listener startup exception to
 # localhost.YYYY-MM-DD.log under CATALINA_BASE/logs. Hostless only displays
 # container stdout/stderr, so forward that file to stdout for diagnosis.
+TOMCAT_LOG_PID=""
 (
   set +e
   while true; do
