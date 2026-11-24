@@ -52,6 +52,28 @@ Example using documentation-only placeholder values:
 
 The IP above is reserved for examples and will not connect to a real VPS.
 
+## Connect your InstaBox XFCE desktop through private VNC forwarding
+
+This repository can optionally run the InstaBox CLI inside the Hostless Guacamole container and keep a private port-forward to the VNC server inside your own InstaBox machine. No terminal access to Hostless is required.
+
+In the Hostless app's **Environment variables** section, set:
+
+- `INSTABOX_API_KEY`: your existing InstaBox API key (keep this value secret; do not put it in GitHub).
+- `INSTABOX_MACHINE`: the exact machine name shown in your InstaBox dashboard. The terminal prompt in this setup showed `instabox-linux-guaq`; use that only if it matches the dashboard's machine name.
+- `INSTABOX_LOCAL_PORT`: optional; defaults to `15901`.
+- `INSTABOX_REMOTE_PORT`: optional; defaults to `5901`.
+
+After redeploying, the Hostless logs should show **Starting private InstaBox VNC tunnel**. The tunnel listens on the Guacamole container's loopback interface, and `guacd` connects to it from that same container.
+
+In Guacamole, use the QuickConnect field and enter:
+
+`vnc://127.0.0.1:15901/`
+
+The current InstaBox desktop reported an Xvnc server on `127.0.0.1:5901` with VNC authentication disabled. Do not publish port 5901 publicly or expose this local forwarded port to the internet. Access is intended to stay inside the private InstaBox tunnel and the authenticated Guacamole service.
+
+InstaBox's free-plan pause and maximum-runtime limits still apply. When the sandbox pauses or its runtime ends, the remote desktop can disconnect. Resume the machine in the InstaBox dashboard; if the private forward does not reconnect by itself, restart/redeploy the Hostless app to start a fresh forward. This configuration does not send keepalives or attempt to bypass InstaBox's free-plan limits.
+
+
 ## Runtime settings
 
 - Build system: Docker
