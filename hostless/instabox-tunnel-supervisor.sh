@@ -25,6 +25,20 @@ fi
 
 mkdir -p "${HOME:-/tmp}/.ssh"
 
+TUNNEL_PID=""
+cleanup() {
+  if [ -n "$TUNNEL_PID" ]; then
+    kill -TERM "$TUNNEL_PID" 2>/dev/null || true
+    wait "$TUNNEL_PID" 2>/dev/null || true
+  fi
+}
+stop() {
+  cleanup
+  exit 0
+}
+trap cleanup EXIT
+trap stop INT TERM
+
 while true; do
   STATUS="$("$CLI" ls 2>/dev/null | awk -v machine="$MACHINE" '$1 == machine { print $2; exit }')"
 
@@ -62,8 +76,11 @@ while true; do
   esac
 
   log "Opening VNC tunnel 127.0.0.1:$LOCAL_PORT -> $MACHINE:$REMOTE_PORT"
-  "$CLI" port-forward "$MACHINE" "$LOCAL_PORT:$REMOTE_PORT"
+  "$CLI" port-forward "$MACHINE" "$LOCAL_PORT:$REMOTE_PORT" &
+  TUNNEL_PID=$!
+  wait "$TUNNEL_PID"
   RESULT=$?
+  TUNNEL_PID=""
   log "VNC tunnel exited (status $RESULT); checking the VM and reconnecting in 5 seconds."
   sleep 5
 done
