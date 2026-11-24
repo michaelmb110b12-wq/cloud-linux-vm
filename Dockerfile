@@ -2,8 +2,21 @@
 # Hostless uses a read-only root filesystem; runtime data is placed in /tmp.
 FROM abesnier/guacamole:1.6.0-pg17
 
+# The InstaBox tunnel needs curl for CLI installation and OpenSSH for VNC forwarding.
+USER root
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl openssh-client \
+    && rm -rf /var/lib/apt/lists/*
+ENV INSTABOX_INSTALL_HOME=/opt/instabox-install
+RUN mkdir -p "$INSTABOX_INSTALL_HOME" \
+    && HOME="$INSTABOX_INSTALL_HOME" sh -c 'curl -fsSL https://api.instabox.sh/install.sh | sh' \
+    && test -x "$INSTABOX_INSTALL_HOME/.local/bin/instabox" \
+    && chmod 0755 "$INSTABOX_INSTALL_HOME/.local/bin/instabox" \
+    && chmod 0755 "$INSTABOX_INSTALL_HOME" "$INSTABOX_INSTALL_HOME/.local" "$INSTABOX_INSTALL_HOME/.local/bin"
+
 COPY hostless/entrypoint.sh /usr/local/bin/hostless-entrypoint
-RUN chmod 0755 /usr/local/bin/hostless-entrypoint
+COPY hostless/instabox-tunnel-supervisor.sh /usr/local/bin/instabox-tunnel-supervisor
+RUN chmod 0755 /usr/local/bin/hostless-entrypoint /usr/local/bin/instabox-tunnel-supervisor
 
 ENV GUACAMOLE_HOME=/tmp/guac-state/guacamole
 ENV PGDATA=/tmp/guac-state/postgres
