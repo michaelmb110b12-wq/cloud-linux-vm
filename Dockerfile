@@ -2,8 +2,10 @@
 # Hostless uses a read-only root filesystem; runtime data is placed in /tmp.
 FROM abesnier/guacamole:1.6.0-pg17
 
-# Install the InstaBox CLI into the image at build time. Hostless's runtime
-# filesystem is read-only, so the CLI must not be installed at container start.
+# Install the InstaBox CLI at build time. The installer downloads a package,
+# so keep download and execution separate: this makes network failures visible
+# in Hostless build logs instead of hiding them inside a curl | sh pipeline.
+USER root
 RUN set -eux; \
     if ! command -v curl >/dev/null 2>&1; then \
       apt-get update; \
@@ -11,9 +13,14 @@ RUN set -eux; \
       rm -rf /var/lib/apt/lists/*; \
     fi; \
     mkdir -p /tmp/instabox-cli-home; \
-    HOME=/tmp/instabox-cli-home sh -c 'curl -fsSL https://api.instabox.sh/install.sh | sh'; \
-    install -m 0755 /tmp/instabox-cli-home/.local/bin/instabox /usr/local/bin/instabox; \
-    rm -rf /tmp/instabox-cli-home
+    curl --fail --location --show-error --retry 3 --retry-delay 2 \
+      https://api.instabox.sh/install.sh \
+      --output /tmp/instabox-install.sh; \
+    HOME=/tmp/instabox-cli-home sh /tmp/instabox-install.sh; \
+    test -x /tmp/instabox-cli-home/.local/bin/instabox; \
+    cp /tmp/instabox-cli-home/.local/bin/instabox /usr/local/bin/instabox; \
+    chmod 0755 /usr/local/bin/instabox; \
+    rm -rf /tmp/instabox-cli-home /tmp/instabox-install.sh
 
 COPY hostless/entrypoint.sh /usr/local/bin/hostless-entrypoint
 RUN chmod 0755 /usr/local/bin/hostless-entrypoint
