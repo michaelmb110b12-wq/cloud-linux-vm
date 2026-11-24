@@ -10,7 +10,8 @@ fail() {
   exit 1
 }
 
-export PATH="/command:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+export PATH="/opt/instabox-install/.local/bin:/command:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+export INSTABOX_API_URL="${INSTABOX_API_URL:-https://api.instabox.sh}"
 
 : "${PG_MAJOR:=17}"
 : "${PORT:=8080}"
@@ -139,10 +140,13 @@ PGCONF
 PG_PID=""
 GUACD_PID=""
 TOMCAT_PID=""
+INSTABOX_PID=""
 
 shutdown() {
   log "Stopping Guacamole services"
   set +e
+  [ -n "$INSTABOX_PID" ] && kill -TERM "$INSTABOX_PID" 2>/dev/null
+  [ -n "$INSTABOX_PID" ] && wait "$INSTABOX_PID" 2>/dev/null
   [ -n "$TOMCAT_LOG_PID" ] && kill -TERM "$TOMCAT_LOG_PID" 2>/dev/null
   [ -n "$TOMCAT_PID" ] && kill -TERM "$TOMCAT_PID" 2>/dev/null
   [ -n "$GUACD_PID" ] && kill -TERM "$GUACD_PID" 2>/dev/null
@@ -187,6 +191,16 @@ fi
 log "Starting guacd"
  /usr/local/sbin/guacd -b 127.0.0.1 -L "$GUACD_LOG_LEVEL" -f &
 GUACD_PID=$!
+
+# Keep the InstaBox VM and its VNC tunnel available on this same app's
+# localhost so the saved Guacamole connection can continue using 127.0.0.1:15901.
+if [ -n "${INSTABOX_API_KEY:-}" ]; then
+  log "Starting InstaBox VM/tunnel supervisor in the background"
+  /usr/local/bin/instabox-tunnel-supervisor &
+  INSTABOX_PID=$!
+else
+  log "INSTABOX_API_KEY is not configured; skipping automatic InstaBox tunnel"
+fi
 
 # Tomcat writes the detailed filter/listener startup exception to
 # localhost.YYYY-MM-DD.log under CATALINA_BASE/logs. Hostless only displays
